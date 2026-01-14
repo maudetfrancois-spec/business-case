@@ -1,0 +1,728 @@
+import React, { useState, useMemo } from 'react';
+import { 
+  Plus, Trash2, Save, Calculator, TrendingUp, DollarSign, 
+  Settings, Layers, ChevronDown, ChevronUp, Activity, Calendar, AlertCircle 
+} from 'lucide-react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, 
+  ResponsiveContainer, LineChart, Line, ComposedChart, Area 
+} from 'recharts';
+
+// --- Types & Interfaces ---
+
+interface YearlyData {
+  year: number;
+  volume: number;
+  lta: number; // % reduction price
+}
+
+interface PaymentMilestone {
+  id: string;
+  date: string; // YYYY-MM-DD
+  percentage: number; // 0-100
+}
+
+interface PartReference {
+  id: string;
+  name: string;
+  
+  // Matière & Process
+  materialPrice: number; // €/kg
+  partWeight: number; // g
+  scrapRate: number; // % Taux de rebut
+  supplyCost: number; // €/u (Nouveau: Coût insert/fourniture)
+  cycleTime: number; // s
+  cavities: number; // nb
+  pressRate: number; // €/h
+  nbOperators: number;
+  operatorRate: number; // €/h
+  
+  // Investissements (Outillages/Machines spécifiques)
+  investmentAmount: number; // €
+  
+  // Echéanciers (Nouveau)
+  supplierMilestones: PaymentMilestone[];
+  customerMilestones: PaymentMilestone[];
+  
+  // Vente & Tréso
+  baseSellingPrice: number; // €
+  paymentTermsClient: number; // Jours
+  paymentTermsSupplier: number; // Jours
+  
+  // Données annuelles
+  yearlyData: YearlyData[];
+}
+
+interface ProjectSettings {
+  startYear: number;
+  duration: number; // 8 ans
+  wacc: number; // %
+  taxRate: number; // %
+}
+
+// --- Fonctions Financières Utilitaires ---
+
+const calculateNPV = (rate: number, cashFlows: number[]) => {
+  return cashFlows.reduce((acc, val, i) => acc + val / Math.pow(1 + rate / 100, i), 0);
+};
+
+const calculateIRR = (cashFlows: number[], guess = 0.1) => {
+  const maxIter = 1000;
+  const precision = 0.00001;
+  let rate = guess;
+  for (let i = 0; i < maxIter; i++) {
+    let npv = 0;
+    let dNpv = 0;
+    for (let t = 0; t < cashFlows.length; t++) {
+      npv += cashFlows[t] / Math.pow(1 + rate, t);
+      dNpv -= (t * cashFlows[t]) / Math.pow(1 + rate, t + 1);
+    }
+    const newRate = rate - npv / dNpv;
+    if (Math.abs(newRate - rate) < precision) return newRate * 100;
+    rate = newRate;
+  }
+  return 0;
+};
+
+// --- Composant Principal ---
+
+export default function MultiRefBusinessCase() {
+  
+  // --- State ---
+
+  const [settings, setSettings] = useState<ProjectSettings>({
+    startYear: 2025,
+    duration: 8,
+    wacc: 10, // 10% coût capital moyen
+    taxRate: 25 // 25% IS
+  });
+
+  const [activeTab, setActiveTab] = useState<'parts' | 'dashboard'>('parts');
+  const [expandedPartId, setExpandedPartId] = useState<string | null>(null);
+
+  const [parts, setParts] = useState<PartReference[]>([
+    {
+      id: '1',
+      name: 'Référence A - Coque',
+      materialPrice: 2.5,
+      partWeight: 150,
+      scrapRate: 2.0,
+      supplyCost: 0.50, // Exemple insert
+      cycleTime: 45,
+      cavities: 2,
+      pressRate: 65,
+      nbOperators: 0.5,
+      operatorRate: 35,
+      investmentAmount: 150000,
+      supplierMilestones: [
+          { id: 's1', date: '2025-03-01', percentage: 30 },
+          { id: 's2', date: '2025-06-01', percentage: 50 },
+          { id: 's3', date: '2025-09-01', percentage: 20 },
+      ],
+      customerMilestones: [
+          { id: 'c1', date: '2026-01-15', percentage: 100 }
+      ],
+      baseSellingPrice: 4.50,
+      paymentTermsClient: 60,
+      paymentTermsSupplier: 45,
+      yearlyData: Array.from({ length: 8 }, (_, i) => ({
+        year: 2025 + i,
+        volume: i === 0 ? 0 : 50000, // Rampe
+        lta: 0
+      }))
+    }
+  ]);
+
+  // --- Helpers Gestion State ---
+
+  const addPart = () => {
+    const newId = Math.random().toString(36).substr(2, 9);
+    const newPart: PartReference = {
+      id: newId,
+      name: 'Nouvelle Référence',
+      materialPrice: 0, partWeight: 0, scrapRate: 0, supplyCost: 0, cycleTime: 0, cavities: 1, pressRate: 0, nbOperators: 0, operatorRate: 0,
+      investmentAmount: 0, 
+      supplierMilestones: [{ id: Math.random().toString(36), date: `${settings.startYear}-01-01`, percentage: 100 }],
+      customerMilestones: [],
+      baseSellingPrice: 0, paymentTermsClient: 60, paymentTermsSupplier: 30,
+      yearlyData: Array.from({ length: settings.duration }, (_, i) => ({
+        year: settings.startYear + i,
+        volume: 0,
+        lta: 0
+      }))
+    };
+    setParts([...parts, newPart]);
+    setExpandedPartId(newId);
+  };
+
+  const removePart = (id: string) => {
+    setParts(parts.filter(p => p.id !== id));
+  };
+
+  const updatePart = (id: string, field: keyof PartReference, value: any) => {
+    setParts(parts.map(p => p.id === id ? { ...p, [field]: value } : p));
+  };
+
+  const updateYearlyData = (partId: string, yearIndex: number, field: keyof YearlyData, value: number) => {
+    setParts(parts.map(p => {
+      if (p.id !== partId) return p;
+      const newData = [...p.yearlyData];
+      newData[yearIndex] = { ...newData[yearIndex], [field]: value };
+      return { ...p, yearlyData: newData };
+    }));
+  };
+
+  // --- Helpers Gestion Echéances ---
+  
+  const addMilestone = (partId: string, type: 'supplier' | 'customer') => {
+      setParts(parts.map(p => {
+          if (p.id !== partId) return p;
+          const newM: PaymentMilestone = { 
+              id: Math.random().toString(36).substr(2, 5), 
+              date: `${settings.startYear}-01-01`, 
+              percentage: 0 
+          };
+          return type === 'supplier' 
+            ? { ...p, supplierMilestones: [...p.supplierMilestones, newM] }
+            : { ...p, customerMilestones: [...p.customerMilestones, newM] };
+      }));
+  };
+
+  const removeMilestone = (partId: string, type: 'supplier' | 'customer', mId: string) => {
+      setParts(parts.map(p => {
+          if (p.id !== partId) return p;
+          return type === 'supplier' 
+            ? { ...p, supplierMilestones: p.supplierMilestones.filter(m => m.id !== mId) }
+            : { ...p, customerMilestones: p.customerMilestones.filter(m => m.id !== mId) };
+      }));
+  };
+
+  const updateMilestone = (partId: string, type: 'supplier' | 'customer', mId: string, field: keyof PaymentMilestone, val: any) => {
+      setParts(parts.map(p => {
+          if (p.id !== partId) return p;
+          const list = type === 'supplier' ? p.supplierMilestones : p.customerMilestones;
+          const newList = list.map(m => m.id === mId ? { ...m, [field]: val } : m);
+          return type === 'supplier' ? { ...p, supplierMilestones: newList } : { ...p, customerMilestones: newList };
+      }));
+  };
+
+  // --- Moteur de Calcul (Consolidation) ---
+
+  const consolidatedResults = useMemo(() => {
+    // Initialisation des tableaux annuels globaux
+    const globalTimeline = Array.from({ length: settings.duration }, (_, i) => {
+      return {
+        year: settings.startYear + i,
+        revenue: 0,
+        variableCosts: 0,
+        fixedCosts: 0, // Amortissements investissements
+        investmentsOut: 0, // Cash Out CAPEX
+        investmentsIn: 0, // Cash In (paiement client)
+        bfr: 0,
+        deltaBfr: 0,
+        tax: 0,
+        netResult: 0,
+        ebitda: 0,
+        ebit: 0,
+        freeCashFlow: 0,
+        capitalEmployed: 0
+      };
+    });
+
+    let cumulativeBfrPrevious = 0;
+
+    // 1. Itération sur chaque pièce pour sommer les revenus et coûts
+    parts.forEach(part => {
+      
+      // Calcul Coût Unitaire Variable (CUV)
+      const matCost = (part.partWeight / 1000) * part.materialPrice * (1 + (part.scrapRate || 0) / 100);
+      
+      const hourlyProd = (3600 / (part.cycleTime || 1)) * part.cavities;
+      const safeHourlyProd = hourlyProd === 0 ? 1 : hourlyProd;
+      
+      const pressCostUnit = part.pressRate / safeHourlyProd;
+      const laborCostUnit = (part.operatorRate * part.nbOperators) / safeHourlyProd;
+      const supplyCostUnit = part.supplyCost || 0; // Ajout coût fourniture
+
+      const unitVariableCost = matCost + pressCostUnit + laborCostUnit + supplyCostUnit;
+
+      // --- Gestion Investissement (Mapping Date -> Année) ---
+      // Fournisseur (Sortie Cash)
+      let earliestInvYear = settings.startYear + settings.duration;
+      part.supplierMilestones.forEach(m => {
+          const mDate = new Date(m.date);
+          const mYear = mDate.getFullYear();
+          const yearIdx = mYear - settings.startYear;
+          if (yearIdx >= 0 && yearIdx < settings.duration) {
+              const amount = part.investmentAmount * (m.percentage / 100);
+              globalTimeline[yearIdx].investmentsOut += amount;
+              if (mYear < earliestInvYear) earliestInvYear = mYear;
+          }
+      });
+
+      // Client (Entrée Cash)
+      part.customerMilestones.forEach(m => {
+          const mDate = new Date(m.date);
+          const mYear = mDate.getFullYear();
+          const yearIdx = mYear - settings.startYear;
+          if (yearIdx >= 0 && yearIdx < settings.duration) {
+              const amount = part.investmentAmount * (m.percentage / 100);
+              globalTimeline[yearIdx].investmentsIn += amount;
+          }
+      });
+
+
+      // Calcul P&L et BFR par pièce
+      let currentPrice = part.baseSellingPrice;
+
+      part.yearlyData.forEach((yd, idx) => {
+        if (idx > 0) currentPrice = currentPrice * (1 - (yd.lta || 0) / 100);
+
+        const vol = yd.volume || 0;
+        const revenue = vol * currentPrice;
+        const cogs = vol * unitVariableCost;
+        
+        // BFR Component (Receivables - Payables)
+        const receivables = (revenue * part.paymentTermsClient) / 365;
+        const payables = (cogs * part.paymentTermsSupplier) / 365;
+        const partBfr = receivables - payables;
+
+        // Aggregation Globale
+        globalTimeline[idx].revenue += revenue;
+        globalTimeline[idx].variableCosts += cogs;
+        globalTimeline[idx].bfr += partBfr;
+
+        // Capital Employed (Investissement Net non amorti + BFR)
+        // Simplification: Amortissement linéaire sur 5 ans à partir du premier paiement fournisseur
+        const depreciationStartIdx = earliestInvYear - settings.startYear;
+        const depDuration = 5;
+        let depreciation = 0;
+        let netAsset = 0;
+
+        if (depreciationStartIdx < settings.duration) { // Si un paiement existe
+             const yearsPassed = idx - depreciationStartIdx;
+             if (yearsPassed >= 0 && yearsPassed < depDuration) {
+                 depreciation = part.investmentAmount / depDuration;
+                 netAsset = part.investmentAmount * (1 - (yearsPassed / depDuration));
+             }
+        }
+        
+        globalTimeline[idx].fixedCosts += depreciation; 
+        globalTimeline[idx].capitalEmployed += (netAsset + partBfr);
+      });
+    });
+
+    // 2. Calculs finaux globaux
+    let bfrPrev = 0;
+    
+    globalTimeline.forEach((yr, idx) => {
+      yr.ebitda = yr.revenue - yr.variableCosts;
+      yr.ebit = yr.ebitda - yr.fixedCosts; 
+      
+      yr.tax = yr.ebit > 0 ? yr.ebit * (settings.taxRate / 100) : 0;
+      yr.netResult = yr.ebit - yr.tax;
+      
+      yr.deltaBfr = yr.bfr - bfrPrev;
+      const operatingCashFlow = yr.ebitda - yr.tax - yr.deltaBfr;
+      bfrPrev = yr.bfr;
+
+      const investingCashFlow = -yr.investmentsOut + yr.investmentsIn;
+      yr.freeCashFlow = operatingCashFlow + investingCashFlow;
+    });
+
+    const flows = globalTimeline.map(t => t.freeCashFlow);
+    const npv = calculateNPV(settings.wacc, flows);
+    const irr = calculateIRR(flows);
+    const totalRevenue = globalTimeline.reduce((a, b) => a + b.revenue, 0);
+    const avgMcv = totalRevenue > 0 ? (globalTimeline.reduce((a, b) => a + (b.revenue - b.variableCosts), 0) / totalRevenue) * 100 : 0;
+    const avgRoce = globalTimeline.reduce((a,b) => a + (b.capitalEmployed > 0 ? (b.ebit/b.capitalEmployed) : 0), 0) / settings.duration * 100;
+    const totalEbitda = globalTimeline.reduce((a, b) => a + b.ebitda, 0);
+
+    return { timeline: globalTimeline, npv, irr, avgMcv, avgRoce, totalEbitda, totalRevenue };
+
+  }, [parts, settings]);
+
+  // --- Render ---
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 font-sans text-slate-800">
+      
+      {/* Header */}
+      <header className="mb-6 bg-white p-4 shadow rounded-lg border-l-4 border-indigo-600 flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Simulateur Business Case Industriel</h1>
+          <p className="text-sm text-slate-500">Multi-références • Plasturgie • P&L Consolidé</p>
+        </div>
+        <div className="flex gap-4 items-center bg-slate-100 p-2 rounded">
+           <div className="flex flex-col text-right">
+             <span className="text-xs text-slate-500 font-bold uppercase">WACC</span>
+             <input 
+               type="number" 
+               value={settings.wacc} 
+               onChange={e => setSettings({...settings, wacc: parseFloat(e.target.value) || 0})}
+               className="w-16 bg-transparent text-right font-bold text-indigo-600 border-b border-indigo-300 focus:outline-none"
+             />
+             <span className="text-xs text-indigo-600">%</span>
+           </div>
+           <div className="h-8 w-px bg-slate-300"></div>
+           <div className="flex flex-col text-right">
+             <span className="text-xs text-slate-500 font-bold uppercase">Taux IS</span>
+             <input 
+               type="number" 
+               value={settings.taxRate} 
+               onChange={e => setSettings({...settings, taxRate: parseFloat(e.target.value) || 0})}
+               className="w-16 bg-transparent text-right font-bold text-indigo-600 border-b border-indigo-300 focus:outline-none"
+             />
+             <span className="text-xs text-indigo-600">%</span>
+           </div>
+        </div>
+      </header>
+
+      {/* Tabs */}
+      <div className="flex gap-4 mb-4 border-b border-slate-200">
+        <button 
+          onClick={() => setActiveTab('parts')}
+          className={`pb-2 px-4 font-semibold flex items-center gap-2 ${activeTab === 'parts' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500'}`}
+        >
+          <Layers size={18}/> Gestion des Pièces ({parts.length})
+        </button>
+        <button 
+          onClick={() => setActiveTab('dashboard')}
+          className={`pb-2 px-4 font-semibold flex items-center gap-2 ${activeTab === 'dashboard' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500'}`}
+        >
+          <Activity size={18}/> Résultats & Consolidation
+        </button>
+      </div>
+
+      {/* CONTENT: PARTS MANAGEMENT */}
+      {activeTab === 'parts' && (
+        <div className="space-y-4">
+          {parts.map((part) => (
+            <div key={part.id} className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+              {/* Part Header */}
+              <div 
+                className="p-4 bg-slate-50 flex justify-between items-center cursor-pointer hover:bg-slate-100 transition"
+                onClick={() => setExpandedPartId(expandedPartId === part.id ? null : part.id)}
+              >
+                <div className="flex items-center gap-3">
+                  {expandedPartId === part.id ? <ChevronUp size={20} className="text-slate-400"/> : <ChevronDown size={20} className="text-slate-400"/>}
+                  <input 
+                    type="text" 
+                    value={part.name}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => updatePart(part.id, 'name', e.target.value)}
+                    className="font-bold text-lg bg-transparent border-none focus:ring-0 text-slate-700"
+                  />
+                </div>
+                <div className="flex items-center gap-4">
+                    <div className="text-xs text-slate-500 bg-white px-2 py-1 rounded border">
+                        Prix Base: {part.baseSellingPrice}€
+                    </div>
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); removePart(part.id); }}
+                        className="text-red-400 hover:text-red-600 p-2"
+                        title="Supprimer cette référence"
+                    >
+                        <Trash2 size={18} />
+                    </button>
+                </div>
+              </div>
+
+              {/* Part Details (Collapsible) */}
+              {expandedPartId === part.id && (
+                <div className="p-6 border-t border-slate-200">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                    {/* Block: Coûts Industriels */}
+                    <div className="space-y-3">
+                      <h4 className="font-bold text-slate-500 text-xs uppercase flex items-center gap-2"><Settings size={14}/> Paramètres Process & Coûts</h4>
+                      <Input label="Masse Pièce (g)" value={part.partWeight} onChange={v => updatePart(part.id, 'partWeight', v)} />
+                      <Input label="Prix Matière (€/kg)" value={part.materialPrice} onChange={v => updatePart(part.id, 'materialPrice', v)} />
+                      <Input label="Coût Fourniture/Insert (€/u)" value={part.supplyCost} onChange={v => updatePart(part.id, 'supplyCost', v)} />
+                      <Input label="Taux Rebut (%)" value={part.scrapRate} onChange={v => updatePart(part.id, 'scrapRate', v)} />
+                      <Input label="Temps Cycle (s)" value={part.cycleTime} onChange={v => updatePart(part.id, 'cycleTime', v)} />
+                      <Input label="Nb Empreintes" value={part.cavities} onChange={v => updatePart(part.id, 'cavities', v)} />
+                      <Input label="Taux Presse (€/h)" value={part.pressRate} onChange={v => updatePart(part.id, 'pressRate', v)} />
+                      <Input label="Taux Opérateur (€/h)" value={part.operatorRate} onChange={v => updatePart(part.id, 'operatorRate', v)} />
+                      <Input label="Nb Opérateurs" value={part.nbOperators} onChange={v => updatePart(part.id, 'nbOperators', v)} />
+                    </div>
+
+                    {/* Block: Prix & Tréso */}
+                    <div className="space-y-3">
+                      <h4 className="font-bold text-slate-500 text-xs uppercase flex items-center gap-2"><DollarSign size={14}/> Prix & Trésorerie</h4>
+                      <Input label="Prix Vente Base (€)" value={part.baseSellingPrice} onChange={v => updatePart(part.id, 'baseSellingPrice', v)} />
+                      <Input label="Délai Paiement Client (j)" value={part.paymentTermsClient} onChange={v => updatePart(part.id, 'paymentTermsClient', v)} />
+                      <Input label="Délai Paiement Fourn. (j)" value={part.paymentTermsSupplier} onChange={v => updatePart(part.id, 'paymentTermsSupplier', v)} />
+                    </div>
+
+                    {/* Block: Investissements & Échéanciers */}
+                    <div className="space-y-3">
+                      <h4 className="font-bold text-slate-500 text-xs uppercase flex items-center gap-2"><Calculator size={14}/> Investissements (CAPEX)</h4>
+                      <Input label="Montant Investissement (€)" value={part.investmentAmount} onChange={v => updatePart(part.id, 'investmentAmount', v)} />
+                      
+                      <div className="bg-slate-50 p-2 rounded text-sm space-y-2 mt-2 border border-slate-200">
+                          <div className="flex justify-between items-center mb-1">
+                             <span className="font-semibold text-slate-600 text-xs">Paiements Fournisseur (Sorties)</span>
+                             <button onClick={() => addMilestone(part.id, 'supplier')} className="text-indigo-600 hover:text-indigo-800"><Plus size={14}/></button>
+                          </div>
+                          {part.supplierMilestones.map(m => (
+                              <div key={m.id} className="flex gap-2 items-center">
+                                  <input type="date" value={m.date} onChange={(e) => updateMilestone(part.id, 'supplier', m.id, 'date', e.target.value)} className="border p-1 rounded w-32 text-xs" />
+                                  <div className="flex items-center">
+                                    <input type="number" value={m.percentage} onChange={(e) => updateMilestone(part.id, 'supplier', m.id, 'percentage', parseFloat(e.target.value) || 0)} className="border p-1 rounded w-12 text-xs text-right" />
+                                    <span className="text-xs ml-1">%</span>
+                                  </div>
+                                  <span className="text-xs text-slate-400 w-16 text-right">
+                                    {Math.round(part.investmentAmount * m.percentage / 100).toLocaleString()}€
+                                  </span>
+                                  <button onClick={() => removeMilestone(part.id, 'supplier', m.id)} className="text-red-400 hover:text-red-600"><Trash2 size={12}/></button>
+                              </div>
+                          ))}
+                          {part.supplierMilestones.reduce((acc, m) => acc + m.percentage, 0) !== 100 && (
+                              <div className="text-xs text-amber-600 flex items-center gap-1"><AlertCircle size={10}/> Total != 100%</div>
+                          )}
+                      </div>
+
+                       <div className="bg-slate-50 p-2 rounded text-sm space-y-2 mt-1 border border-slate-200">
+                          <div className="flex justify-between items-center mb-1">
+                             <span className="font-semibold text-slate-600 text-xs">Remboursements Client (Entrées)</span>
+                             <button onClick={() => addMilestone(part.id, 'customer')} className="text-indigo-600 hover:text-indigo-800"><Plus size={14}/></button>
+                          </div>
+                          {part.customerMilestones.map(m => (
+                              <div key={m.id} className="flex gap-2 items-center">
+                                  <input type="date" value={m.date} onChange={(e) => updateMilestone(part.id, 'customer', m.id, 'date', e.target.value)} className="border p-1 rounded w-32 text-xs" />
+                                  <div className="flex items-center">
+                                    <input type="number" value={m.percentage} onChange={(e) => updateMilestone(part.id, 'customer', m.id, 'percentage', parseFloat(e.target.value) || 0)} className="border p-1 rounded w-12 text-xs text-right" />
+                                    <span className="text-xs ml-1">%</span>
+                                  </div>
+                                  <span className="text-xs text-slate-400 w-16 text-right">
+                                    {Math.round(part.investmentAmount * m.percentage / 100).toLocaleString()}€
+                                  </span>
+                                  <button onClick={() => removeMilestone(part.id, 'customer', m.id)} className="text-red-400 hover:text-red-600"><Trash2 size={12}/></button>
+                              </div>
+                          ))}
+                      </div>
+
+                    </div>
+                  </div>
+
+                  {/* Yearly Table */}
+                  <div className="overflow-x-auto">
+                    <h4 className="font-bold text-slate-500 text-xs uppercase mb-2">Volumes & LTA</h4>
+                    <table className="w-full text-sm text-left border-collapse">
+                        <thead>
+                            <tr className="bg-slate-100 text-slate-600 border-b border-slate-200">
+                                <th className="p-2 border-r">Année</th>
+                                {part.yearlyData.map(yd => <th key={yd.year} className="p-2 text-center border-r w-24">{yd.year}</th>)}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr className="border-b border-slate-100">
+                                <td className="p-2 font-medium text-slate-600 border-r">Volume</td>
+                                {part.yearlyData.map((yd, idx) => (
+                                    <td key={idx} className="p-1 border-r">
+                                        <input 
+                                            type="number" 
+                                            className="w-full text-center p-1 bg-slate-50 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-indigo-500 transition"
+                                            value={yd.volume || 0}
+                                            onChange={(e) => updateYearlyData(part.id, idx, 'volume', parseFloat(e.target.value) || 0)}
+                                        />
+                                    </td>
+                                ))}
+                            </tr>
+                            <tr>
+                                <td className="p-2 font-medium text-slate-600 border-r">LTA (%)</td>
+                                {part.yearlyData.map((yd, idx) => (
+                                    <td key={idx} className="p-1 border-r">
+                                        <input 
+                                            type="number" 
+                                            step="0.1"
+                                            className="w-full text-center p-1 bg-slate-50 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-indigo-500 transition"
+                                            value={yd.lta || 0}
+                                            onChange={(e) => updateYearlyData(part.id, idx, 'lta', parseFloat(e.target.value) || 0)}
+                                        />
+                                    </td>
+                                ))}
+                            </tr>
+                        </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          <button 
+            onClick={addPart}
+            className="w-full py-4 border-2 border-dashed border-slate-300 rounded-lg text-slate-500 font-semibold hover:border-indigo-400 hover:text-indigo-600 transition flex items-center justify-center gap-2"
+          >
+            <Plus size={20}/> Ajouter une nouvelle référence
+          </button>
+        </div>
+      )}
+
+      {/* CONTENT: DASHBOARD */}
+      {activeTab === 'dashboard' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          
+          {/* Top KPIs */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+             <KpiCard 
+                label="NPV (VAN)" 
+                value={consolidatedResults.npv} 
+                isCurrency={true} 
+                subtext={`WACC ${settings.wacc}%`}
+                color={consolidatedResults.npv > 0 ? 'green' : 'red'}
+             />
+             <KpiCard 
+                label="IRR (TRI)" 
+                value={consolidatedResults.irr} 
+                isPercent={true} 
+                color={consolidatedResults.irr > 15 ? 'green' : consolidatedResults.irr > 0 ? 'orange' : 'red'}
+             />
+             <KpiCard 
+                label="EBITDA Total" 
+                value={consolidatedResults.totalEbitda} 
+                isCurrency={true} 
+                color="blue"
+             />
+             <KpiCard 
+                label="MCV Moyenne" 
+                value={consolidatedResults.avgMcv} 
+                isPercent={true} 
+                color="indigo"
+             />
+             <KpiCard 
+                label="ROCE Moyen" 
+                value={consolidatedResults.avgRoce} 
+                isPercent={true} 
+                color="purple"
+             />
+             <KpiCard 
+                label="CA Total" 
+                value={consolidatedResults.totalRevenue} 
+                isCurrency={true} 
+                color="slate"
+             />
+          </div>
+
+          {/* Charts Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white p-4 rounded-lg shadow border border-slate-200 h-80">
+                <h3 className="font-bold text-slate-700 mb-4">Structure Cash Flow & BFR</h3>
+                <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={consolidatedResults.timeline} margin={{top: 5, right: 20, bottom: 20, left: 0}}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="year" />
+                        <YAxis yAxisId="left" />
+                        <YAxis yAxisId="right" orientation="right" />
+                        <Tooltip formatter={(val: number) => new Intl.NumberFormat('fr-FR', {style: 'currency', currency: 'EUR', maximumFractionDigits:0}).format(val)} />
+                        <Legend />
+                        <Bar yAxisId="left" dataKey="ebitda" name="EBITDA" fill="#818cf8" barSize={20} />
+                        <Line yAxisId="left" type="monotone" dataKey="freeCashFlow" name="Free Cash Flow" stroke="#10b981" strokeWidth={3} />
+                        <Line yAxisId="right" type="monotone" dataKey="bfr" name="BFR" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                    </ComposedChart>
+                </ResponsiveContainer>
+            </div>
+            
+             <div className="bg-white p-4 rounded-lg shadow border border-slate-200 h-80">
+                <h3 className="font-bold text-slate-700 mb-4">Marge (MCV) vs Résultat Net</h3>
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={consolidatedResults.timeline} margin={{top: 5, right: 20, bottom: 20, left: 0}}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="year" />
+                        <YAxis />
+                        <Tooltip formatter={(val: number) => new Intl.NumberFormat('fr-FR', {style: 'currency', currency: 'EUR', maximumFractionDigits:0}).format(val)} />
+                        <Legend />
+                        <Bar dataKey="revenue" name="Chiffre d'Affaires" fill="#cbd5e1" stackId="a" />
+                        <Bar dataKey="variableCosts" name="Coûts Variables" fill="#ef4444" stackId="a" />
+                        <Line type="monotone" dataKey="netResult" name="Résultat Net" stroke="#4f46e5" strokeWidth={2} />
+                    </BarChart>
+                </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Detailed Table */}
+          <div className="bg-white p-4 rounded-lg shadow border border-slate-200 overflow-x-auto">
+             <h3 className="font-bold text-slate-700 mb-4">Compte de Résultat Consolidé (P&L)</h3>
+             <table className="w-full text-sm text-right">
+                <thead>
+                    <tr className="bg-slate-800 text-white">
+                        <th className="p-3 text-left rounded-l">Indicateur (k€)</th>
+                        {consolidatedResults.timeline.map(t => <th key={t.year} className="p-3">{t.year}</th>)}
+                    </tr>
+                </thead>
+                <tbody>
+                    <Row label="Chiffre d'Affaires" data={consolidatedResults.timeline} k="revenue" bold />
+                    <Row label="Coûts Variables" data={consolidatedResults.timeline} k="variableCosts" negate />
+                    <Row label="EBITDA" data={consolidatedResults.timeline} k="ebitda" bold color="text-indigo-600" />
+                    <Row label="Amortissements" data={consolidatedResults.timeline} k="fixedCosts" negate />
+                    <Row label="EBIT" data={consolidatedResults.timeline} k="ebit" bold />
+                    <Row label="Impôts" data={consolidatedResults.timeline} k="tax" negate />
+                    <Row label="Résultat Net" data={consolidatedResults.timeline} k="netResult" bold />
+                    <tr className="border-b border-slate-100"><td colSpan={10} className="h-4"></td></tr>
+                    <Row label="BFR (Working Cap)" data={consolidatedResults.timeline} k="bfr" italic color="text-amber-600" />
+                    <Row label="Free Cash Flow" data={consolidatedResults.timeline} k="freeCashFlow" bold color="text-emerald-600" />
+                </tbody>
+             </table>
+          </div>
+
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// --- Sub-components ---
+
+const Input = ({ label, value, onChange }: { label: string, value: number, onChange: (v: any) => void }) => (
+  <div className="flex flex-col">
+    <label className="text-xs text-slate-500 mb-1">{label}</label>
+    <input 
+      type="number" 
+      step="0.01"
+      className="border rounded p-2 text-sm bg-white focus:ring-2 focus:ring-indigo-200 outline-none"
+      value={value || 0}
+      onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+    />
+  </div>
+);
+
+const KpiCard = ({ label, value, isCurrency, isPercent, subtext, color }: any) => {
+    const formatted = isCurrency 
+        ? new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(value)
+        : isPercent 
+            ? new Intl.NumberFormat('fr-FR', { style: 'percent', minimumFractionDigits: 1 }).format(value / 100)
+            : value;
+    
+    const colorClass = {
+        green: 'text-emerald-600',
+        red: 'text-red-600',
+        blue: 'text-blue-600',
+        orange: 'text-amber-600',
+        indigo: 'text-indigo-600',
+        purple: 'text-purple-600',
+        slate: 'text-slate-700'
+    }[color as string] || 'text-slate-700';
+
+    return (
+        <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 flex flex-col justify-between">
+            <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">{label}</span>
+            <div className="mt-2">
+                <span className={`text-2xl font-bold ${colorClass}`}>{formatted}</span>
+                {subtext && <p className="text-xs text-slate-400 mt-1">{subtext}</p>}
+            </div>
+        </div>
+    );
+};
+
+const Row = ({ label, data, k, bold, italic, color, negate }: any) => (
+    <tr className={`border-b border-slate-50 hover:bg-slate-50 ${bold ? 'font-bold' : ''} ${italic ? 'italic' : ''} ${color || 'text-slate-700'}`}>
+        <td className="p-2 text-left">{label}</td>
+        {data.map((d: any) => (
+            <td key={d.year} className="p-2">
+                {new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format((negate ? -d[k] : d[k]) / 1000)}
+            </td>
+        ))}
+    </tr>
+);
