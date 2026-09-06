@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Observatoire de l'économie mondiale</title>
+<meta name="description" content="Carte mondiale interactive des indicateurs macroéconomiques : PIB par habitant, solde public, démographie, chômage. Données Banque mondiale, historiques depuis 1960.">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="css/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%233987e5'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-dot" aria-hidden="true"></span>
+    <div>
+      <h1>Observatoire de l'économie mondiale</h1>
+      <p class="brand-sub">Banque mondiale · BCE — <span id="freshness">chargement…</span></p>
+    </div>
+  </div>
+
+  <div class="topbar-controls">
+    <div class="field">
+      <label for="search">Pays</label>
+      <input id="search" type="search" list="country-list" placeholder="Rechercher un pays…" autocomplete="off">
+      <datalist id="country-list"></datalist>
+    </div>
+
+    <div class="field">
+      <label for="map-metric">Indicateur cartographié</label>
+      <select id="map-metric"></select>
+    </div>
+
+    <div class="field field-year">
+      <label for="year">Année : <output id="year-out">—</output></label>
+      <input id="year" type="range" min="1960" max="2025" step="1" value="2023">
+    </div>
+  </div>
+
+  <div class="fx" id="fx" hidden>
+    <span class="fx-label">Change BCE <time id="fx-date"></time></span>
+    <ul class="fx-list" id="fx-list"></ul>
+  </div>
+</header>
+
+<main>
+  <div id="map" role="application" aria-label="Carte du monde des indicateurs économiques"></div>
+
+  <div class="map-legend" id="map-legend" hidden>
+    <p class="legend-title" id="legend-title"></p>
+    <div class="legend-ramp" id="legend-ramp"></div>
+    <div class="legend-ends"><span id="legend-min"></span><span id="legend-max"></span></div>
+    <p class="legend-note" id="legend-note"></p>
+  </div>
+
+  <div class="compare-tray" id="compare-tray" hidden>
+    <span class="tray-label">Comparaison</span>
+    <ul id="compare-list"></ul>
+  </div>
+
+  <aside class="panel" id="panel" tabindex="-1" aria-label="Fiche pays" hidden>
+    <button class="panel-close" id="panel-close" aria-label="Fermer le panneau">&times;</button>
+    <div id="panel-body"></div>
+  </aside>
+</main>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<!-- Leaflet 1.9.4 (BSD-2-Clause) est versionné dans vendor/ : pas de CDN
+     tiers dans le chemin critique, et un hash d'intégrité de moins à maintenir. -->
+<script src="vendor/leaflet/leaflet.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
